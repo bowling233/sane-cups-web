@@ -1,0 +1,39 @@
+# Binaries and build outputs
+printer-web
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.out
+bin/
+dist/
+
+# User data (auto-created on first run)
+scans/
+
+# Temporary / test files
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.log
+scratch_*
+test_*
+esci_test*
+
+# Environment & Config
+.env
+.env.local
+*.local
+
+# IDE & Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS artifacts
+.DS_Store
+Thumbs.db

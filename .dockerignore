@@ -1,0 +1,7 @@
+printer-web
+scans/
+*.log
+*.png
+*.jpg
+*.pdf
+.git

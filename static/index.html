@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scanner & Printer Hub</title>
+    <meta name="description" content="Self-hosted web utility for network scanners and CUPS printers.">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <!-- App Header -->
+    <header class="app-header">
+        <div class="header-inner">
+            <div class="header-brand">
+                <svg class="icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>
+                <span class="brand-name">Scanner &amp; Printer Hub</span>
+            </div>
+            <div class="header-status" id="headerStatusBar">
+                <div class="status-indicator" id="scannerStatusPill">
+                    <span class="status-dot offline" id="scannerDot"></span>
+                    <span id="scannerStatusText">Scanner: Checking...</span>
+                </div>
+                <div class="status-indicator" id="printerStatusPill">
+                    <span class="status-dot offline" id="printerDot"></span>
+                    <span id="printerStatusText">Printer: Checking...</span>
+                </div>
+                <button class="btn btn-sm" id="refreshStatusBtn" title="Refresh hardware status">Refresh</button>
+                <div id="authContainer" style="display: none; align-items: center; gap: 0.5rem; margin-left: 0.5rem;">
+                    <span id="loggedInUserBadge" class="user-tag">admin</span>
+                    <button class="btn btn-sm btn-outline" id="logoutBtn">Sign Out</button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Login Screen -->
+    <div id="loginSection" class="login-wrapper" style="display: none;">
+        <div class="login-box">
+            <div class="login-header">
+                <h2>Sign In</h2>
+                <p>Authentication required to access scanner and printer tools.</p>
+            </div>
+            <div id="loginErrorAlert" class="alert alert-danger" style="display: none;"></div>
+            <form id="loginForm">
+                <div class="form-row">
+                    <label for="loginUsername">Username</label>
+                    <input type="text" id="loginUsername" class="form-input" required autocomplete="username">
+                </div>
+                <div class="form-row">
+                    <label for="loginPassword">Password</label>
+                    <input type="password" id="loginPassword" class="form-input" required autocomplete="current-password">
+                </div>
+                <button type="submit" id="loginSubmitBtn" class="btn btn-primary btn-block" style="margin-top: 1rem;">Sign In</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main Dashboard -->
+    <div id="dashboardSection">
+        <!-- Navigation -->
+        <nav class="app-nav">
+            <div class="nav-inner">
+                <button class="nav-tab active" data-tab="tab-scan">Single Scan</button>
+                <button class="nav-tab" data-tab="tab-multipage">Multi-Page Scan</button>
+                <button class="nav-tab" data-tab="tab-gallery">Documents <span id="galleryCountBadge" class="badge">0</span></button>
+                <button class="nav-tab" data-tab="tab-printer">Print Queue</button>
+            </div>
+        </nav>
+
+        <main class="app-main">
+            <!-- TAB 1: Single Scan -->
+            <section id="tab-scan" class="tab-panel active">
+                <div class="panel-layout">
+                    <!-- Scan Settings -->
+                    <div class="panel-card">
+                        <div class="card-header">
+                            <h3>Scan Options</h3>
+                        </div>
+                        <div class="card-body">
+                            <form id="singleScanForm">
+                                <div class="form-grid">
+                                    <div class="form-row">
+                                        <label for="scanDpiSelect">Resolution</label>
+                                        <select id="scanDpiSelect" class="form-select">
+                                            <option value="150">150 DPI (Fast / Draft)</option>
+                                            <option value="300" selected>300 DPI (Standard)</option>
+                                            <option value="600">600 DPI (High Quality)</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="scanModeSelect">Color Mode</label>
+                                        <select id="scanModeSelect" class="form-select">
+                                            <option value="Color" selected>Color</option>
+                                            <option value="Gray">Grayscale</option>
+                                            <option value="Lineart">Black &amp; White (Lineart)</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div class="form-grid">
+                                    <div class="form-row">
+                                        <label for="scanFormatSelect">File Format</label>
+                                        <select id="scanFormatSelect" class="form-select">
+                                            <option value="png" selected>PNG Image</option>
+                                            <option value="pdf">PDF Document</option>
+                                            <option value="jpg">JPEG Image</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="scanCustomName">Filename Prefix (Optional)</label>
+                                        <input type="text" id="scanCustomName" class="form-input" placeholder="e.g. invoice_august">
+                                    </div>
+                                </div>
+
+                                <div class="form-actions">
+                                    <button type="submit" id="startScanBtn" class="btn btn-primary btn-block">
+                                        Scan Document
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Scan Preview -->
+                    <div class="panel-card">
+                        <div class="card-header flex-between">
+                            <h3>Preview</h3>
+                            <div id="previewActions" style="display: none; gap: 0.5rem;">
+                                <a id="downloadPreviewBtn" class="btn btn-sm btn-outline" href="#" download>Download</a>
+                                <button id="printPreviewBtn" class="btn btn-sm btn-outline">Print</button>
+                            </div>
+                        </div>
+                        <div class="card-body preview-area" id="singlePreviewPane">
+                            <div class="placeholder-text" id="previewPlaceholder">
+                                <p>Ready to scan. Place document on flatbed and click <strong>Scan Document</strong>.</p>
+                            </div>
+                            <img id="previewImage" class="preview-output" style="display: none;" alt="Preview">
+                            <iframe id="previewPdfFrame" class="preview-pdf" style="display: none;" title="PDF Preview"></iframe>
+
+                            <!-- Scanning Progress Bar -->
+                            <div class="progress-overlay" id="scanningOverlay" style="display: none;">
+                                <div class="spinner"></div>
+                                <p class="progress-text">Acquiring image from scanner...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 2: Multi-Page Scan -->
+            <section id="tab-multipage" class="tab-panel">
+                <div class="panel-card">
+                    <div class="card-header flex-between">
+                        <div>
+                            <h3>Multi-Page Document Compiler</h3>
+                            <p class="subtitle">Scan pages one by one, then compile into a single PDF document.</p>
+                        </div>
+                        <div class="actions-group">
+                            <button id="mpCancelBtn" class="btn btn-sm btn-danger" style="display: none;">Cancel</button>
+                            <button id="mpFinishBtn" class="btn btn-sm btn-primary" style="display: none;">Compile PDF (<span id="mpPageCountBadge">0</span> pages)</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="toolbar-grid">
+                            <div class="form-row">
+                                <label for="mpDpi">Resolution</label>
+                                <select id="mpDpi" class="form-select">
+                                    <option value="150">150 DPI</option>
+                                    <option value="300" selected>300 DPI</option>
+                                    <option value="600">600 DPI</option>
+                                </select>
+                            </div>
+                            <div class="form-row">
+                                <label for="mpMode">Color Mode</label>
+                                <select id="mpMode" class="form-select">
+                                    <option value="Color" selected>Color</option>
+                                    <option value="Gray">Grayscale</option>
+                                    <option value="Lineart">Black &amp; White</option>
+                                </select>
+                            </div>
+                            <div class="form-row">
+                                <label for="mpDocName">Output PDF Filename</label>
+                                <input type="text" id="mpDocName" class="form-input" placeholder="e.g. tax_return_2026">
+                            </div>
+                            <div class="form-row form-actions-inline">
+                                <button id="mpScanPageBtn" class="btn btn-primary btn-block">Scan Next Page</button>
+                            </div>
+                        </div>
+
+                        <div class="section-divider"></div>
+
+                        <h4>Session Pages:</h4>
+                        <div class="pages-list" id="mpPagesStrip">
+                            <p class="empty-state">No pages scanned in current session. Click <strong>Scan Next Page</strong> to begin.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 3: Documents Gallery -->
+            <section id="tab-gallery" class="tab-panel">
+                <div class="panel-card">
+                    <div class="card-header flex-between">
+                        <div>
+                            <h3>Scanned Documents</h3>
+                            <p class="subtitle">Download, print, or manage previously saved scans.</p>
+                        </div>
+                        <div class="toolbar-search">
+                            <input type="text" id="gallerySearchInput" class="form-input" placeholder="Filter by filename..." style="width: 240px;">
+                            <button id="refreshGalleryBtn" class="btn btn-sm btn-outline">Refresh</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 45%;">Document Name</th>
+                                        <th style="width: 15%;">Format</th>
+                                        <th style="width: 15%;">Size</th>
+                                        <th style="width: 25%; text-align: right;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="galleryTableBody">
+                                    <tr>
+                                        <td colspan="4" class="empty-cell">No scanned files found.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 4: Print Queue -->
+            <section id="tab-printer" class="tab-panel">
+                <div class="panel-layout">
+                    <!-- Upload File to Print -->
+                    <div class="panel-card">
+                        <div class="card-header">
+                            <h3>Submit Print Job</h3>
+                            <p class="subtitle">Send PDF, PNG, JPG, or TXT files to the CUPS printer queue.</p>
+                        </div>
+                        <div class="card-body">
+                            <form id="printUploadForm">
+                                <div class="drop-target" id="printDropzone">
+                                    <input type="file" id="printFileInput" accept=".pdf,.png,.jpg,.jpeg,.txt" style="display: none;">
+                                    <p class="drop-text">Click or drag &amp; drop document here</p>
+                                    <p class="drop-hint">PDF, PNG, JPG, TXT up to 25MB</p>
+                                    <div id="selectedPrintFileName" class="selected-file-label" style="display: none;"></div>
+                                </div>
+
+                                <div class="form-grid" style="margin-top: 1rem;">
+                                    <div class="form-row">
+                                        <label for="printCopies">Copies</label>
+                                        <input type="number" id="printCopies" class="form-input" min="1" max="20" value="1">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="printDestinationQueue">Destination Queue</label>
+                                        <input type="text" id="printDestinationQueue" class="form-input" value="Default Printer" readonly>
+                                    </div>
+                                </div>
+
+                                <div class="form-actions">
+                                    <button type="submit" id="submitPrintBtn" class="btn btn-primary btn-block" disabled>
+                                        Send to Printer
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Active Queue Diagnostics -->
+                    <div class="panel-card">
+                        <div class="card-header flex-between">
+                            <h3>CUPS Queue Status</h3>
+                            <button id="cancelAllJobsBtn" class="btn btn-sm btn-danger">Cancel All Jobs</button>
+                        </div>
+                        <div class="card-body">
+                            <div id="printerQueueContainer" class="queue-list">
+                                <p class="empty-state">No pending jobs in print queue.</p>
+                            </div>
+
+                            <div class="section-divider"></div>
+
+                            <label class="form-label" style="font-size: 0.75rem;">CUPS Daemon Output:</label>
+                            <pre id="rawCupsStatus" class="log-viewer">Checking status...</pre>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Preview Modal -->
+    <div class="modal" id="previewModal">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <span id="modalTitle" class="modal-title">Document Preview</span>
+                <div class="modal-actions">
+                    <a id="modalDownloadBtn" class="btn btn-sm btn-outline" href="#" download>Download</a>
+                    <button id="modalPrintBtn" class="btn btn-sm btn-outline">Print</button>
+                    <button id="modalCloseBtn" class="btn btn-sm btn-outline">Close</button>
+                </div>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-area" id="toastContainer"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

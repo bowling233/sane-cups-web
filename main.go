@@ -149,6 +149,8 @@ func main() {
 	addr := ":" + port
 	log.Printf("🚀 Scanner & Printer Web Hub running on port %s", port)
 	log.Printf("📂 Scans directory: %s", scansDir)
+	log.Printf("🖨️  Printing enabled: %v (ENABLE_PRINTING)", isPrintingEnabled())
+	log.Printf("📠 Scanning enabled: %v (ENABLE_SCANNING)", isScanningEnabled())
 	if isAuthRequired() {
 		log.Printf("🔒 Web UI & API Authentication enabled (User: %s)", getAuthUsername())
 	} else {
@@ -196,6 +198,48 @@ func getAuthPassword() string {
 		return p
 	}
 	return os.Getenv("AUTH_PASS")
+}
+
+func isPrintingEnabled() bool {
+	val := strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_PRINTING")))
+	if val == "" {
+		val = strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_PRINTER")))
+	}
+	if val == "" {
+		val = strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_CUPS")))
+	}
+	if val == "false" || val == "0" || val == "no" || val == "off" || val == "disabled" {
+		return false
+	}
+	return true
+}
+
+func isScanningEnabled() bool {
+	val := strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_SCANNING")))
+	if val == "" {
+		val = strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_SCANNER")))
+	}
+	if val == "" {
+		val = strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_SANE")))
+	}
+	if val == "false" || val == "0" || val == "no" || val == "off" || val == "disabled" {
+		return false
+	}
+	return true
+}
+
+func getDefaultScanFormat() string {
+	f := strings.ToLower(strings.TrimSpace(os.Getenv("DEFAULT_FORMAT")))
+	if f == "" {
+		f = strings.ToLower(strings.TrimSpace(os.Getenv("SCAN_FORMAT")))
+	}
+	if f == "png" || f == "jpg" || f == "jpeg" || f == "pdf" {
+		if f == "jpeg" {
+			return "jpg"
+		}
+		return f
+	}
+	return "pdf"
 }
 
 func isAuthRequired() bool {
@@ -570,33 +614,56 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	force := r.URL.Query().Get("refresh") == "true"
-	devices, defaultDev := discoverScannerDevices(ctx, force)
-	scannerFound := len(devices) > 0 || defaultDev != ""
+	printingEnabled := isPrintingEnabled()
+	scanningEnabled := isScanningEnabled()
 
-	defaultPrinter := detectDefaultPrinter(ctx)
+	var devices []SaneDevice
+	var defaultDev string
+	var scannerFound bool
 
-	cmdCups := exec.CommandContext(ctx, "lpstat", "-p", "-d")
-	cupsOut, _ := cmdCups.CombinedOutput()
-	cupsOutputStr := string(cupsOut)
+	if scanningEnabled {
+		force := r.URL.Query().Get("refresh") == "true"
+		devices, defaultDev = discoverScannerDevices(ctx, force)
+		scannerFound = len(devices) > 0 || defaultDev != ""
+	}
 
-	printerFound := defaultPrinter != "" || strings.Contains(cupsOutputStr, "printer")
-	accepting := strings.Contains(cupsOutputStr, "enabled") || strings.Contains(cupsOutputStr, "accepting") || strings.Contains(cupsOutputStr, "idle")
+	var defaultPrinter string
+	var cupsOutputStr string
+	var printerFound bool
+	var accepting bool
+	var activeJobs int
 
-	cmdJobs := exec.CommandContext(ctx, "lpstat", "-o")
-	jobsOut, _ := cmdJobs.CombinedOutput()
-	activeJobs := 0
-	if len(strings.TrimSpace(string(jobsOut))) > 0 {
-		activeJobs = len(strings.Split(strings.TrimSpace(string(jobsOut)), "\n"))
+	if printingEnabled {
+		defaultPrinter = detectDefaultPrinter(ctx)
+
+		cmdCups := exec.CommandContext(ctx, "lpstat", "-p", "-d")
+		cupsOut, _ := cmdCups.CombinedOutput()
+		cupsOutputStr = string(cupsOut)
+
+		printerFound = defaultPrinter != "" || strings.Contains(cupsOutputStr, "printer")
+		accepting = strings.Contains(cupsOutputStr, "enabled") || strings.Contains(cupsOutputStr, "accepting") || strings.Contains(cupsOutputStr, "idle")
+
+		cmdJobs := exec.CommandContext(ctx, "lpstat", "-o")
+		jobsOut, _ := cmdJobs.CombinedOutput()
+		if len(strings.TrimSpace(string(jobsOut))) > 0 {
+			activeJobs = len(strings.Split(strings.TrimSpace(string(jobsOut)), "\n"))
+		}
 	}
 
 	jsonResponse(w, http.StatusOK, map[string]any{
+		"features": map[string]bool{
+			"scanning": scanningEnabled,
+			"printing": printingEnabled,
+		},
 		"scanner": map[string]any{
+			"enabled":        scanningEnabled,
 			"online":         scannerFound,
 			"default_device": defaultDev,
+			"default_format": getDefaultScanFormat(),
 			"devices":        devices,
 		},
 		"printer": map[string]any{
+			"enabled":     printingEnabled,
 			"online":      printerFound,
 			"name":        defaultPrinter,
 			"accepting":   accepting,
@@ -689,6 +756,11 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !isScanningEnabled() {
+		jsonError(w, http.StatusForbidden, "Scanning functionality is disabled by server configuration (ENABLE_SCANNING=false)")
+		return
+	}
+
 	if !scanMutex.TryLock() {
 		jsonError(w, http.StatusConflict, "Scanner is currently busy. Please wait for the ongoing scan to complete.")
 		return
@@ -769,6 +841,11 @@ func handleMultiPageStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !isScanningEnabled() {
+		jsonError(w, http.StatusForbidden, "Scanning functionality is disabled by server configuration (ENABLE_SCANNING=false)")
+		return
+	}
+
 	sessionID := fmt.Sprintf("session_%s_%d", time.Now().Format("20060102_150405"), time.Now().UnixNano()%1000)
 	sessionPath := filepath.Join(sessionsDir, sessionID)
 
@@ -786,6 +863,11 @@ func handleMultiPageStart(w http.ResponseWriter, r *http.Request) {
 func handleMultiPageAddPage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if !isScanningEnabled() {
+		jsonError(w, http.StatusForbidden, "Scanning functionality is disabled by server configuration (ENABLE_SCANNING=false)")
 		return
 	}
 
@@ -1183,6 +1265,16 @@ func handlePrintersList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !isPrintingEnabled() {
+		jsonResponse(w, http.StatusOK, map[string]any{
+			"enabled":         false,
+			"default_printer": "",
+			"status_text":     "Printing is disabled via server configuration (ENABLE_PRINTING=false)",
+			"jobs":            []string{},
+		})
+		return
+	}
+
 	defaultPrinter := detectDefaultPrinter(r.Context())
 
 	cmdStat := exec.Command("lpstat", "-p", "-d")
@@ -1201,6 +1293,7 @@ func handlePrintersList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, http.StatusOK, map[string]any{
+		"enabled":         true,
 		"default_printer": defaultPrinter,
 		"status_text":     string(outStat),
 		"jobs":            jobsList,
@@ -1211,6 +1304,11 @@ func handlePrintersList(w http.ResponseWriter, r *http.Request) {
 func handlePrintJob(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if !isPrintingEnabled() {
+		jsonError(w, http.StatusForbidden, "Printing functionality is disabled by server configuration (ENABLE_PRINTING=false)")
 		return
 	}
 
@@ -1313,6 +1411,11 @@ func handlePrintJob(w http.ResponseWriter, r *http.Request) {
 func handleCancelPrintJob(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if !isPrintingEnabled() {
+		jsonError(w, http.StatusForbidden, "Printing functionality is disabled by server configuration (ENABLE_PRINTING=false)")
 		return
 	}
 

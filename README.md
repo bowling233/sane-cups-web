@@ -54,6 +54,8 @@ Access the web interface at **`http://localhost:8085`** (or your server's IP add
 
 | Variable | Description | Default |
 | :--- | :--- | :--- |
+| `ENABLE_PRINTING` | Enable/disable CUPS printer functionality (`true` / `false`) | `true` |
+| `ENABLE_SCANNING` | Enable/disable SANE scanner functionality (`true` / `false`) | `true` |
 | `PORT` | Web server listening port | `8085` |
 | `AUTO_DISCOVER` | Enable/disable network broadcast scanner discovery (`true` / `false`) | `true` |
 | `SCANNER_IP` / `SCANNER_HOST` | Fixed IP address of the scanner | *(Auto-discovered)* |
@@ -62,6 +64,7 @@ Access the web interface at **`http://localhost:8085`** (or your server's IP add
 | `AUTH_USERNAME` | Username for basic authentication | `admin` |
 | `AUTH_PASSWORD` | Password for basic authentication (leave blank for open access) | *(Disabled / Open)* |
 | `CUPS_SERVER` | Path to CUPS socket or server host | `/var/run/cups/cups.sock` |
+
 
 ---
 

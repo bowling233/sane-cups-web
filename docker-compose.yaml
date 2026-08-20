@@ -8,6 +8,9 @@ services:
       - ./scans:/app/scans
       - /var/run/cups/cups.sock:/var/run/cups/cups.sock:ro
     environment:
+      # Optional: toggle printing / scanning features (default: true)
+      # - ENABLE_PRINTING=false
+      # - ENABLE_SCANNING=true
       - CUPS_SERVER=/var/run/cups/cups.sock
       # Auto-discovery enabled by default (true). Set to false if using static IP only:
       - AUTO_DISCOVER=true
@@ -16,5 +19,6 @@ services:
       # Optional: override default CUPS printer destination queue
       # - DEFAULT_PRINTER=My_Printer_Queue
       # Optional: enable password protection (leave commented for open LAN access)
-      - AUTH_USERNAME=admin
-      - AUTH_PASSWORD=secretpassword
+      # - AUTH_USERNAME=admin
+      # - AUTH_PASSWORD=secretpassword
+

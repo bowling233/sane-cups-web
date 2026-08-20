@@ -94,20 +94,29 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 4000);
     }
 
+    // Feature Flags
+    let printingEnabled = true;
+    let scanningEnabled = true;
+
     // Tabs Switching
+    function switchTab(target) {
+        tabButtons.forEach(b => b.classList.remove('active'));
+        tabPanels.forEach(p => p.classList.remove('active'));
+
+        const btn = document.querySelector(`.nav-tab[data-tab="${target}"]`);
+        if (btn) btn.classList.add('active');
+        const panel = document.getElementById(target);
+        if (panel) panel.classList.add('active');
+        currentTab = target;
+
+        if (target === 'tab-gallery') loadScansGallery();
+        if (target === 'tab-printer' && printingEnabled) loadPrinterStatus();
+    }
+
     tabButtons.forEach(btn => {
         btn.addEventListener('click', () => {
             const target = btn.getAttribute('data-tab');
-            tabButtons.forEach(b => b.classList.remove('active'));
-            tabPanels.forEach(p => p.classList.remove('active'));
-
-            btn.classList.add('active');
-            const panel = document.getElementById(target);
-            if (panel) panel.classList.add('active');
-            currentTab = target;
-
-            if (target === 'tab-gallery') loadScansGallery();
-            if (target === 'tab-printer') loadPrinterStatus();
+            switchTab(target);
         });
     });
 
@@ -118,30 +127,97 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!res.ok) throw new Error('Status query failed');
             const data = await res.json();
 
-            // Scanner Status
-            if (data.scanner && data.scanner.online) {
-                scannerDot.className = 'status-dot online';
-                scannerStatusText.textContent = 'Scanner: Ready';
+            if (data.features) {
+                printingEnabled = data.features.printing !== false;
+                scanningEnabled = data.features.scanning !== false;
             } else {
-                scannerDot.className = 'status-dot offline';
-                scannerStatusText.textContent = 'Scanner: Offline';
+                if (data.printer && typeof data.printer.enabled !== 'undefined') {
+                    printingEnabled = data.printer.enabled;
+                }
+                if (data.scanner && typeof data.scanner.enabled !== 'undefined') {
+                    scanningEnabled = data.scanner.enabled;
+                }
+            }
+
+            // Adjust navigation tabs and brand title based on active features
+            const printerTabBtn = document.querySelector('[data-tab="tab-printer"]');
+            const printerStatusPill = document.getElementById('printerStatusPill');
+            const scannerStatusPill = document.getElementById('scannerStatusPill');
+            const scanTabBtn = document.querySelector('[data-tab="tab-scan"]');
+            const mpTabBtn = document.querySelector('[data-tab="tab-multipage"]');
+            const brandName = document.querySelector('.brand-name');
+
+            if (!printingEnabled) {
+                if (printerTabBtn) printerTabBtn.style.display = 'none';
+                if (printerStatusPill) printerStatusPill.style.display = 'none';
+                if (printPreviewBtn) printPreviewBtn.style.display = 'none';
+                if (modalPrintBtn) modalPrintBtn.style.display = 'none';
+                if (brandName && scanningEnabled) brandName.textContent = 'Scanner Hub';
+                if (currentTab === 'tab-printer') {
+                    switchTab(scanningEnabled ? 'tab-scan' : 'tab-gallery');
+                }
+            } else {
+                if (printerTabBtn) printerTabBtn.style.display = '';
+                if (printerStatusPill) printerStatusPill.style.display = '';
+                if (printPreviewBtn) printPreviewBtn.style.display = '';
+                if (modalPrintBtn) modalPrintBtn.style.display = '';
+            }
+
+            // Re-render gallery if scans are loaded so print buttons update immediately
+            if (galleryScans && galleryScans.length > 0) {
+                renderGallery(galleryScans);
+            }
+
+            if (!scanningEnabled) {
+                if (scanTabBtn) scanTabBtn.style.display = 'none';
+                if (mpTabBtn) mpTabBtn.style.display = 'none';
+                if (scannerStatusPill) scannerStatusPill.style.display = 'none';
+                if (brandName && printingEnabled) brandName.textContent = 'Printer Hub';
+                if (currentTab === 'tab-scan' || currentTab === 'tab-multipage') {
+                    switchTab(printingEnabled ? 'tab-printer' : 'tab-gallery');
+                }
+            } else {
+                if (scanTabBtn) scanTabBtn.style.display = '';
+                if (mpTabBtn) mpTabBtn.style.display = '';
+                if (scannerStatusPill) scannerStatusPill.style.display = '';
+            }
+
+            if (printingEnabled && scanningEnabled && brandName) {
+                brandName.textContent = 'Scanner & Printer Hub';
+            }
+
+            // Scanner Status
+            if (scanningEnabled) {
+                if (data.scanner && data.scanner.online) {
+                    scannerDot.className = 'status-dot online';
+                    scannerStatusText.textContent = 'Scanner: Ready';
+                } else {
+                    scannerDot.className = 'status-dot offline';
+                    scannerStatusText.textContent = 'Scanner: Offline';
+                }
+
+                if (data.scanner && data.scanner.default_format && scanFormatSelect && !scanFormatSelect.dataset.userChanged) {
+                    scanFormatSelect.value = data.scanner.default_format;
+                }
             }
 
             // Printer Status
-            if (data.printer && data.printer.online) {
-                printerDot.className = 'status-dot online';
-                const jobsText = data.printer.active_jobs > 0 ? ` (${data.printer.active_jobs} jobs)` : '';
-                printerStatusText.textContent = `Printer: Ready${jobsText}`;
-                if (printDestinationQueue && data.printer.name) {
-                    printDestinationQueue.value = data.printer.name;
+            if (printingEnabled) {
+                if (data.printer && data.printer.online) {
+                    printerDot.className = 'status-dot online';
+                    const jobsText = data.printer.active_jobs > 0 ? ` (${data.printer.active_jobs} jobs)` : '';
+                    printerStatusText.textContent = `Printer: Ready${jobsText}`;
+                    if (printDestinationQueue && data.printer.name) {
+                        printDestinationQueue.value = data.printer.name;
+                    }
+                } else {
+                    printerDot.className = 'status-dot offline';
+                    printerStatusText.textContent = 'Printer: Offline';
                 }
-            } else {
-                printerDot.className = 'status-dot offline';
-                printerStatusText.textContent = 'Printer: Offline';
-            }
 
-            if (data.printer && data.printer.raw_status) {
-                rawCupsStatus.textContent = data.printer.raw_status;
+                if (data.printer && data.printer.raw_status) {
+                    rawCupsStatus.textContent = data.printer.raw_status;
+                }
             }
         } catch (err) {
             scannerDot.className = 'status-dot offline';
@@ -154,6 +230,10 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshStatusBtn.addEventListener('click', () => {
         showToast('Refreshing hardware status...', 'info');
         checkStatus();
+    });
+
+    scanFormatSelect.addEventListener('change', () => {
+        scanFormatSelect.dataset.userChanged = 'true';
     });
 
     // Single Scan Execution
@@ -205,7 +285,12 @@ document.addEventListener('DOMContentLoaded', () => {
         downloadPreviewBtn.href = url + '?download=true';
         downloadPreviewBtn.setAttribute('download', filename);
 
-        printPreviewBtn.onclick = () => printExistingScan(filename);
+        if (printingEnabled) {
+            printPreviewBtn.style.display = '';
+            printPreviewBtn.onclick = () => printExistingScan(filename);
+        } else {
+            printPreviewBtn.style.display = 'none';
+        }
 
         if (format === 'pdf') {
             previewImage.style.display = 'none';
@@ -413,18 +498,21 @@ document.addEventListener('DOMContentLoaded', () => {
             dlBtn.setAttribute('download', scan.name);
             dlBtn.textContent = 'Download';
 
-            const printBtn = document.createElement('button');
-            printBtn.className = 'btn btn-sm btn-outline';
-            printBtn.textContent = 'Print';
-            printBtn.onclick = () => printExistingScan(scan.name);
+            divActions.appendChild(dlBtn);
+
+            if (printingEnabled) {
+                const printBtn = document.createElement('button');
+                printBtn.className = 'btn btn-sm btn-outline';
+                printBtn.textContent = 'Print';
+                printBtn.onclick = () => printExistingScan(scan.name);
+                divActions.appendChild(printBtn);
+            }
 
             const delBtn = document.createElement('button');
             delBtn.className = 'btn btn-sm btn-danger';
             delBtn.textContent = 'Delete';
             delBtn.onclick = () => deleteScan(scan.name);
 
-            divActions.appendChild(dlBtn);
-            divActions.appendChild(printBtn);
             divActions.appendChild(delBtn);
             tdActions.appendChild(divActions);
 
@@ -469,7 +557,13 @@ document.addEventListener('DOMContentLoaded', () => {
         modalTitle.textContent = filename;
         modalDownloadBtn.href = url + '?download=true';
         modalDownloadBtn.setAttribute('download', filename);
-        modalPrintBtn.onclick = () => printExistingScan(filename);
+        
+        if (printingEnabled) {
+            modalPrintBtn.style.display = '';
+            modalPrintBtn.onclick = () => printExistingScan(filename);
+        } else {
+            modalPrintBtn.style.display = 'none';
+        }
 
         modalBody.replaceChildren();
 
@@ -657,12 +751,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     authContainer.style.display = 'none';
                 }
 
-                checkStatus();
-                loadScansGallery();
+                await checkStatus();
+                await loadScansGallery();
             }
         } catch (err) {
-            checkStatus();
-            loadScansGallery();
+            await checkStatus();
+            await loadScansGallery();
         }
     }
 

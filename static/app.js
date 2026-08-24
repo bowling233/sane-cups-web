@@ -109,6 +109,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const option = document.createElement('option');
                 option.value = device.id;
                 option.textContent = device.name;
+                option.title = device.name;
                 option.dataset.scan = device.scan ? 'true' : 'false';
                 option.dataset.print = device.print ? 'true' : 'false';
                 deviceSelect.appendChild(option);

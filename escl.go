@@ -7,6 +7,8 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"os"
@@ -17,6 +19,15 @@ import (
 
 func esclClient(s *ScanConfig) (*http.Client, error) {
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: s.TLS.ServerName}
+	// Some embedded printers only implement TLS 1.2 with static-RSA cipher
+	// suites. Go does not offer these by default, but they remain useful when
+	// explicitly configuring legacy devices that otherwise support HTTPS.
+	tlsConfig.CipherSuites = append(tlsConfig.CipherSuites,
+		tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+		tls.TLS_RSA_WITH_AES_128_CBC_SHA,
+	)
 	if !s.TLS.Verify {
 		tlsConfig.InsecureSkipVerify = true
 	} // Explicit compatibility option.
@@ -80,11 +91,10 @@ func executeESCLScan(ctx context.Context, s *ScanConfig, dpi int, mode, format, 
 	if mode == "Lineart" {
 		color = "BlackAndWhite1"
 	}
-	docfmt := "image/png"
-	if format == "jpg" || format == "jpeg" {
-		docfmt = "image/jpeg"
-	}
-	xml := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?><scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:escl="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm"><pwg:Version>2.0</pwg:Version><pwg:ScanRegions><pwg:ScanRegion><pwg:ContentRegionUnits>escl:ThreeHundredthsOfInches</pwg:ContentRegionUnits><pwg:Height>3508</pwg:Height><pwg:Width>2480</pwg:Width><pwg:XOffset>0</pwg:XOffset><pwg:YOffset>0</pwg:YOffset></pwg:ScanRegion></pwg:ScanRegions><pwg:DocumentFormat>%s</pwg:DocumentFormat><scan:ColorMode>%s</scan:ColorMode><scan:XResolution>%d</scan:XResolution><scan:YResolution>%d</scan:YResolution><scan:InputSource>Platen</scan:InputSource></scan:ScanSettings>`, docfmt, color, dpi, dpi)
+	// JPEG is the broadly supported eSCL interchange format. Convert it after
+	// retrieval when the caller requests PNG or PDF.
+	docfmt := "image/jpeg"
+	xml := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?><scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:escl="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm"><pwg:Version>2.0</pwg:Version><pwg:ScanRegions><pwg:ScanRegion><pwg:ContentRegionUnits>escl:ThreeHundredthsOfInches</pwg:ContentRegionUnits><pwg:Height>3508</pwg:Height><pwg:Width>2550</pwg:Width><pwg:XOffset>0</pwg:XOffset><pwg:YOffset>0</pwg:YOffset></pwg:ScanRegion></pwg:ScanRegions><pwg:InputSource>Platen</pwg:InputSource><scan:ColorMode>%s</scan:ColorMode><pwg:DocumentFormat>%s</pwg:DocumentFormat><scan:DocumentFormatExt>%s</scan:DocumentFormatExt><scan:XResolution>%d</scan:XResolution><scan:YResolution>%d</scan:YResolution></scan:ScanSettings>`, color, docfmt, docfmt, dpi, dpi)
 	base := strings.TrimRight(s.Endpoint, "/")
 	resp, err := esclRequest(ctx, c, s, http.MethodPost, base+"/ScanJobs", strings.NewReader(xml))
 	if err != nil {
@@ -107,18 +117,30 @@ func executeESCLScan(ctx context.Context, s *ScanConfig, dpi int, mode, format, 
 			r.Body.Close()
 		}
 	}()
-	resp, err = esclRequest(ctx, c, s, http.MethodGet, strings.TrimRight(job, "/")+"/NextDocument", nil)
-	if err != nil {
-		return err
+	for {
+		resp, err = esclRequest(ctx, c, s, http.MethodGet, strings.TrimRight(job, "/")+"/NextDocument", nil)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode == http.StatusOK {
+			break
+		}
+		status := resp.Status
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			return fmt.Errorf("eSCL retrieve document: %s", status)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("eSCL retrieve document: %s", resp.Status)
-	}
 	tmp := target
-	needsPDF := format == "pdf"
-	if needsPDF {
-		f, e := os.CreateTemp("", "escl-*.png")
+	needsConversion := format == "pdf" || format == "png"
+	if needsConversion {
+		f, e := os.CreateTemp("", "escl-*.jpg")
 		if e != nil {
 			return e
 		}
@@ -138,12 +160,33 @@ func executeESCLScan(ctx context.Context, s *ScanConfig, dpi int, mode, format, 
 	if closeErr != nil {
 		return closeErr
 	}
-	if needsPDF {
+	if format == "pdf" {
 		data, e := os.ReadFile(tmp)
 		if e != nil {
 			return e
 		}
 		return convertImagesToPDFInPureGo([][]byte{data}, dpi, target)
+	}
+	if format == "png" {
+		in, e := os.Open(tmp)
+		if e != nil {
+			return e
+		}
+		img, _, e := image.Decode(in)
+		in.Close()
+		if e != nil {
+			return e
+		}
+		out, e := os.Create(target)
+		if e != nil {
+			return e
+		}
+		e = png.Encode(out, img)
+		closeErr := out.Close()
+		if e != nil {
+			return e
+		}
+		return closeErr
 	}
 	return nil
 }

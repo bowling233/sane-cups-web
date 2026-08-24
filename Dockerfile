@@ -39,5 +39,8 @@ RUN mkdir -p /app/scans
 EXPOSE 8085
 
 ENV PORT=8085
+# Compatibility with older embedded devices that generate X.509 certificates
+# with a negative serial number. TLS verification settings still apply.
+ENV GODEBUG=x509negativeserial=1
 
 CMD ["/app/printer-web"]

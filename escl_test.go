@@ -30,9 +30,9 @@ func TestExecuteESCLScanWithUnverifiedSelfSignedCertificate(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	out := t.TempDir() + "/scan.png"
+	out := t.TempDir() + "/scan.jpg"
 	s := &ScanConfig{Endpoint: server.URL + "/eSCL", TLS: TLSConfig{Verify: false}, Auth: DeviceAuth{Type: "basic", Username: "user", Password: "pass"}}
-	if err := executeESCLScan(context.Background(), s, 300, "Color", "png", out); err != nil {
+	if err := executeESCLScan(context.Background(), s, 300, "Color", "jpg", out); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(out)

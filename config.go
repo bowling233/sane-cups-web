@@ -11,6 +11,7 @@ import (
 )
 
 type Config struct {
+	Debug          bool         `yaml:"debug"`
 	Server         ServerConfig `yaml:"server"`
 	Authentication AuthConfig   `yaml:"authentication"`
 	Defaults       Defaults     `yaml:"defaults"`

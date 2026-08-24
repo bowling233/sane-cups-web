@@ -92,6 +92,12 @@ var (
 	sessionMutex   sync.RWMutex
 )
 
+func debugf(format string, args ...any) {
+	if appConfig.Debug {
+		log.Printf("DEBUG "+format, args...)
+	}
+}
+
 func init() {
 	var err error
 	baseDir, err = os.Getwd()
@@ -135,7 +141,7 @@ func main() {
 
 	// Static Assets
 	fileServer := http.FileServer(http.Dir(staticDir))
-	mux.Handle("/", fileServer)
+	mux.Handle("/", staticCacheMiddleware(fileServer))
 
 	// Security, Auth & Logging
 	handler := securityMiddleware(loggingMiddleware(authMiddleware(mux)))
@@ -147,6 +153,7 @@ func main() {
 	log.Printf("📂 Scans directory: %s", scansDir)
 	log.Printf("🖨️  Printing enabled: %v (ENABLE_PRINTING)", isPrintingEnabled())
 	log.Printf("📠 Scanning enabled: %v (ENABLE_SCANNING)", isScanningEnabled())
+	log.Printf("🐛 Debug logging: %v", appConfig.Debug)
 	if isAuthRequired() {
 		log.Printf("🔒 Web UI & API Authentication enabled (User: %s)", getAuthUsername())
 	} else {
@@ -408,10 +415,42 @@ func securityMiddleware(next http.Handler) http.Handler {
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
+		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(recorder, r)
 		if strings.HasPrefix(r.URL.Path, "/api/") {
-			log.Printf("[%s] %s (%s)", r.Method, r.URL.Path, time.Since(start))
+			if appConfig.Debug {
+				log.Printf("DEBUG http method=%s path=%s query=%q status=%d bytes=%d remote=%s duration=%s user_agent=%q", r.Method, r.URL.Path, r.URL.RawQuery, recorder.status, recorder.bytes, r.RemoteAddr, time.Since(start), r.UserAgent())
+			} else {
+				log.Printf("[%s] %s (%s)", r.Method, r.URL.Path, time.Since(start))
+			}
 		}
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *statusRecorder) Write(p []byte) (int, error) {
+	n, err := r.ResponseWriter.Write(p)
+	r.bytes += n
+	return n, err
+}
+
+// HTML and its directly referenced assets must be revalidated together. Without
+// this, a browser can combine a new index.html with an older app.js, leaving new
+// controls (such as the device selector) permanently in their loading state.
+func staticCacheMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -446,6 +485,7 @@ func handleDevices(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	debugf("devices count=%d default=%q", len(appConfig.Devices), appConfig.Defaults.Device)
 	jsonResponse(w, http.StatusOK, map[string]any{"devices": appConfig.Devices, "default_device": appConfig.Defaults.Device})
 }
 
@@ -657,6 +697,7 @@ func executeScan(ctx context.Context, deviceID string, dpi int, mode string, for
 	if configured.Scan == nil {
 		return fmt.Errorf("device %q does not support scanning", configured.ID)
 	}
+	debugf("scan device=%q driver=%q dpi=%d mode=%q format=%q target=%q", configured.ID, configured.Scan.Driver, dpi, mode, format, targetPath)
 	if configured.Scan.Driver == "escl" {
 		return executeESCLScan(ctx, configured.Scan, dpi, mode, format, targetPath)
 	}

@@ -1,3 +1,5 @@
+debug: false
+
 server:
   address: ":8085"
   scans_directory: /app/scans

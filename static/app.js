@@ -100,21 +100,30 @@ document.addEventListener('DOMContentLoaded', () => {
     let scanningEnabled = true;
 
     async function loadDevices() {
-        const res = await fetch('/api/devices');
-        if (!res.ok) throw new Error('Failed to load devices');
-        const data = await res.json();
-        deviceSelect.replaceChildren();
-        data.devices.forEach(device => {
+        try {
+            const res = await fetch('/api/devices');
+            if (!res.ok) throw new Error('Failed to load devices');
+            const data = await res.json();
+            deviceSelect.replaceChildren();
+            data.devices.forEach(device => {
+                const option = document.createElement('option');
+                option.value = device.id;
+                option.textContent = device.name;
+                option.dataset.scan = device.scan ? 'true' : 'false';
+                option.dataset.print = device.print ? 'true' : 'false';
+                deviceSelect.appendChild(option);
+            });
+            if (data.devices.length === 0) throw new Error('No devices configured');
+            const remembered = localStorage.getItem('device_id');
+            deviceSelect.value = data.devices.some(d => d.id === remembered) ? remembered : data.default_device;
+            deviceSelect.dispatchEvent(new Event('change'));
+        } catch (err) {
             const option = document.createElement('option');
-            option.value = device.id;
-            option.textContent = device.name;
-            option.dataset.scan = device.scan ? 'true' : 'false';
-            option.dataset.print = device.print ? 'true' : 'false';
-            deviceSelect.appendChild(option);
-        });
-        const remembered = localStorage.getItem('device_id');
-        deviceSelect.value = data.devices.some(d => d.id === remembered) ? remembered : data.default_device;
-        deviceSelect.dispatchEvent(new Event('change'));
+            option.value = '';
+            option.textContent = 'Devices unavailable';
+            deviceSelect.replaceChildren(option);
+            throw err;
+        }
     }
 
     deviceSelect.addEventListener('change', () => {

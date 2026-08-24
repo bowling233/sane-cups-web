@@ -137,6 +137,12 @@ body {
     gap: 0.25rem;
 }
 
+.device-select {
+    width: auto;
+    min-width: 240px;
+    margin: 0.45rem 1rem 0.45rem 0;
+}
+
 .nav-tab {
     background: transparent;
     border: none;

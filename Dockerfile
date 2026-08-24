@@ -3,12 +3,13 @@ FROM golang:1.24-bookworm AS builder
 
 WORKDIR /app
 
-COPY go.mod ./
+COPY go.mod go.sum ./
+RUN go mod download
 # Copy source code
-COPY main.go ./
+COPY *.go ./
 
 # Compile static Go binary
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o printer-web ./main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o printer-web .
 
 # Stage 2: Minimal runtime with SANE and CUPS client
 FROM debian:trixie-slim
@@ -29,6 +30,8 @@ COPY --from=builder /app/printer-web /app/printer-web
 
 # Copy static frontend assets
 COPY static/ /app/static/
+
+COPY config.example.yaml /app/config.yaml
 
 # Create persistent scans directory
 RUN mkdir -p /app/scans

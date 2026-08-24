@@ -30,14 +30,7 @@ services:
     volumes:
       - ./scans:/app/scans
       - /var/run/cups/cups.sock:/var/run/cups/cups.sock:ro
-    environment:
-      - CUPS_SERVER=/var/run/cups/cups.sock
-      # Auto-discovery enabled by default:
-      - AUTO_DISCOVER=true
-      # Optional: specify static scanner IP
-      # - SCANNER_IP=[IP_ADDRESS]
-      # Optional: override default printer queue name
-      # - DEFAULT_PRINTER=My_Printer_Queue
+      - ./config.yaml:/app/config.yaml:ro
 ```
 
 ### 2. Start the Service
@@ -50,20 +43,16 @@ Access the web interface at **`http://localhost:8085`** (or your server's IP add
 
 ---
 
-## ⚙️ Environment Variables
+## ⚙️ Configuration
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `ENABLE_PRINTING` | Enable/disable CUPS printer functionality (`true` / `false`) | `true` |
-| `ENABLE_SCANNING` | Enable/disable SANE scanner functionality (`true` / `false`) | `true` |
-| `PORT` | Web server listening port | `8085` |
-| `AUTO_DISCOVER` | Enable/disable network broadcast scanner discovery (`true` / `false`) | `true` |
-| `SCANNER_IP` / `SCANNER_HOST` | Fixed IP address of the scanner | *(Auto-discovered)* |
-| `DEFAULT_SCANNER` | Explicit SANE device string (e.g. `epsonds:net:[SCANNER_IP]`) | *(Auto-selected)* |
-| `DEFAULT_PRINTER` | CUPS printer destination queue name | *(System default queue)* |
-| `AUTH_USERNAME` | Username for basic authentication | `admin` |
-| `AUTH_PASSWORD` | Password for basic authentication (leave blank for open access) | *(Disabled / Open)* |
-| `CUPS_SERVER` | Path to CUPS socket or server host | `/var/run/cups/cups.sock` |
+All application and device settings live in `/app/config.yaml`. Copy
+`config.example.yaml` to `config.yaml` and edit it before starting the service.
+Each item in `devices` represents a logical scanner, printer, or multifunction
+device. Native `escl` scanning supports HTTP or HTTPS, optional Basic
+authentication, normal CA verification, a custom CA, or a SHA-256 certificate
+pin. Set `tls.verify: false` when compatibility with a self-signed device is
+preferred. The `sane` scan driver remains available for other SANE backends.
+CUPS controls whether a configured print queue uses IPP, IPPS, or authentication.
 
 
 ---

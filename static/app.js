@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const printerDot = document.getElementById('printerDot');
     const printerStatusText = document.getElementById('printerStatusText');
     const refreshStatusBtn = document.getElementById('refreshStatusBtn');
+    const deviceSelect = document.getElementById('deviceSelect');
 
     const tabButtons = document.querySelectorAll('.nav-tab');
     const tabPanels = document.querySelectorAll('.tab-panel');
@@ -98,6 +99,32 @@ document.addEventListener('DOMContentLoaded', () => {
     let printingEnabled = true;
     let scanningEnabled = true;
 
+    async function loadDevices() {
+        const res = await fetch('/api/devices');
+        if (!res.ok) throw new Error('Failed to load devices');
+        const data = await res.json();
+        deviceSelect.replaceChildren();
+        data.devices.forEach(device => {
+            const option = document.createElement('option');
+            option.value = device.id;
+            option.textContent = device.name;
+            option.dataset.scan = device.scan ? 'true' : 'false';
+            option.dataset.print = device.print ? 'true' : 'false';
+            deviceSelect.appendChild(option);
+        });
+        const remembered = localStorage.getItem('device_id');
+        deviceSelect.value = data.devices.some(d => d.id === remembered) ? remembered : data.default_device;
+        deviceSelect.dispatchEvent(new Event('change'));
+    }
+
+    deviceSelect.addEventListener('change', () => {
+        localStorage.setItem('device_id', deviceSelect.value);
+        const option = deviceSelect.selectedOptions[0];
+        scanningEnabled = option?.dataset.scan === 'true';
+        printingEnabled = option?.dataset.print === 'true';
+        checkStatus();
+    });
+
     // Tabs Switching
     function switchTab(target) {
         tabButtons.forEach(b => b.classList.remove('active'));
@@ -123,7 +150,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Hardware Status Check
     async function checkStatus() {
         try {
-            const res = await fetch('/api/status');
+            const res = await fetch(`/api/status?device_id=${encodeURIComponent(deviceSelect.value || '')}`);
             if (!res.ok) throw new Error('Status query failed');
             const data = await res.json();
 
@@ -252,7 +279,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/scan', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dpi, mode, format, custom_name: customName })
+                body: JSON.stringify({ device_id: deviceSelect.value, dpi, mode, format, custom_name: customName })
             });
 
             const result = await res.json();
@@ -331,7 +358,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/scan/multipage/page', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ session_id: currentSessionId, dpi, mode })
+                body: JSON.stringify({ session_id: currentSessionId, device_id: deviceSelect.value, dpi, mode })
             });
 
             const data = await res.json();
@@ -636,6 +663,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const formData = new FormData();
         formData.append('file', selectedPrintFile);
         formData.append('copies', copies.toString());
+        formData.append('device_id', deviceSelect.value);
 
         submitPrintBtn.disabled = true;
         showToast('Submitting print job to queue...', 'info');
@@ -674,7 +702,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/print', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ scan_filename: filename, copies: c })
+                body: JSON.stringify({ scan_filename: filename, copies: c, device_id: deviceSelect.value })
             });
             const data = await res.json();
             if (!res.ok || data.error) throw new Error(data.message || 'Print job failed');
@@ -688,7 +716,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function loadPrinterStatus() {
         try {
-            const res = await fetch('/api/printers');
+            const res = await fetch(`/api/printers?device_id=${encodeURIComponent(deviceSelect.value)}`);
             if (!res.ok) throw new Error('Failed to query printer');
             const data = await res.json();
 
@@ -716,7 +744,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/print/cancel', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({})
+                body: JSON.stringify({ device_id: deviceSelect.value })
             });
             const data = await res.json();
             showToast(data.message || 'Jobs cancelled', 'info');
@@ -751,10 +779,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     authContainer.style.display = 'none';
                 }
 
+                await loadDevices();
                 await checkStatus();
                 await loadScansGallery();
             }
         } catch (err) {
+            await loadDevices();
             await checkStatus();
             await loadScansGallery();
         }

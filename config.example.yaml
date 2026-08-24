@@ -1,0 +1,33 @@
+server:
+  address: ":8085"
+  scans_directory: /app/scans
+  static_directory: /app/static
+  request_limit: 500MiB
+
+authentication:
+  enabled: false
+  username: admin
+  password: ""
+  session_lifetime: 168h
+  secure_cookie: false
+
+defaults:
+  device: example-mfp
+  scan:
+    dpi: 300
+    mode: Color
+    format: pdf
+
+devices:
+  - id: example-mfp
+    name: Example multifunction printer
+    scan:
+      driver: escl
+      endpoint: https://192.0.2.10/eSCL
+      tls:
+        verify: false
+      auth:
+        type: none
+    print:
+      driver: cups
+      queue: Example_Printer

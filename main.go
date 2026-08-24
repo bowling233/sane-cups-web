@@ -29,7 +29,6 @@ import (
 )
 
 const (
-	DefaultPort   = "8085"
 	ScansDirName  = "scans"
 	StaticDirName = "static"
 	CookieName    = "auth_session"
@@ -47,7 +46,7 @@ type ScanRequest struct {
 	Mode       string `json:"mode"`
 	Format     string `json:"format"`
 	CustomName string `json:"custom_name"`
-	Device     string `json:"device"`
+	DeviceID   string `json:"device_id"`
 }
 
 type MultiPageStartResponse struct {
@@ -56,6 +55,7 @@ type MultiPageStartResponse struct {
 
 type MultiPagePageRequest struct {
 	SessionID string `json:"session_id"`
+	DeviceID  string `json:"device_id"`
 	DPI       int    `json:"dpi"`
 	Mode      string `json:"mode"`
 }
@@ -88,16 +88,9 @@ var (
 	lastDiscoverTime time.Time
 	discoverMutex    sync.Mutex
 
-	activeSessions   = make(map[string]time.Time)
-	sessionMutex     sync.RWMutex
+	activeSessions = make(map[string]time.Time)
+	sessionMutex   sync.RWMutex
 )
-
-func getEnv(key, fallback string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-	return fallback
-}
 
 func init() {
 	var err error
@@ -106,16 +99,19 @@ func init() {
 		log.Fatalf("Failed to get working directory: %v", err)
 	}
 
-	scansDir = filepath.Join(baseDir, ScansDirName)
-	staticDir = filepath.Join(baseDir, StaticDirName)
-	sessionsDir = filepath.Join(scansDir, ".temp_sessions")
-
-	_ = os.MkdirAll(scansDir, 0755)
-	_ = os.MkdirAll(sessionsDir, 0755)
-	_ = os.MkdirAll(staticDir, 0755)
 }
 
 func main() {
+	if err := loadConfig(filepath.Join(baseDir, "config.yaml")); err != nil {
+		log.Fatalf("Failed to load config.yaml: %v", err)
+	}
+	scansDir, staticDir = appConfig.Server.ScansDirectory, appConfig.Server.StaticDirectory
+	sessionsDir = filepath.Join(scansDir, ".temp_sessions")
+	for _, dir := range []string{scansDir, sessionsDir, staticDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			log.Fatalf("Create %s: %v", dir, err)
+		}
+	}
 	mux := http.NewServeMux()
 
 	// Authentication Endpoints
@@ -125,6 +121,7 @@ func main() {
 
 	// REST API Endpoints
 	mux.HandleFunc("/api/status", handleStatus)
+	mux.HandleFunc("/api/devices", handleDevices)
 	mux.HandleFunc("/api/scan", handleScan)
 	mux.HandleFunc("/api/scan/multipage/start", handleMultiPageStart)
 	mux.HandleFunc("/api/scan/multipage/page", handleMultiPageAddPage)
@@ -145,9 +142,8 @@ func main() {
 
 	startBackgroundCleaner()
 
-	port := getEnv("PORT", DefaultPort)
-	addr := ":" + port
-	log.Printf("🚀 Scanner & Printer Web Hub running on port %s", port)
+	addr := appConfig.Server.Address
+	log.Printf("🚀 Scanner & Printer Web Hub listening on %s", addr)
 	log.Printf("📂 Scans directory: %s", scansDir)
 	log.Printf("🖨️  Printing enabled: %v (ENABLE_PRINTING)", isPrintingEnabled())
 	log.Printf("📠 Scanning enabled: %v (ENABLE_SCANNING)", isScanningEnabled())
@@ -184,55 +180,33 @@ func main() {
 }
 
 func getAuthUsername() string {
-	if u := os.Getenv("AUTH_USERNAME"); u != "" {
-		return u
-	}
-	if u := os.Getenv("AUTH_USER"); u != "" {
-		return u
-	}
-	return "admin"
+	return appConfig.Authentication.Username
 }
 
 func getAuthPassword() string {
-	if p := os.Getenv("AUTH_PASSWORD"); p != "" {
-		return p
-	}
-	return os.Getenv("AUTH_PASS")
+	return appConfig.Authentication.Password
 }
 
 func isPrintingEnabled() bool {
-	val := strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_PRINTING")))
-	if val == "" {
-		val = strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_PRINTER")))
+	for _, d := range appConfig.Devices {
+		if d.Print != nil {
+			return true
+		}
 	}
-	if val == "" {
-		val = strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_CUPS")))
-	}
-	if val == "false" || val == "0" || val == "no" || val == "off" || val == "disabled" {
-		return false
-	}
-	return true
+	return false
 }
 
 func isScanningEnabled() bool {
-	val := strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_SCANNING")))
-	if val == "" {
-		val = strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_SCANNER")))
+	for _, d := range appConfig.Devices {
+		if d.Scan != nil {
+			return true
+		}
 	}
-	if val == "" {
-		val = strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_SANE")))
-	}
-	if val == "false" || val == "0" || val == "no" || val == "off" || val == "disabled" {
-		return false
-	}
-	return true
+	return false
 }
 
 func getDefaultScanFormat() string {
-	f := strings.ToLower(strings.TrimSpace(os.Getenv("DEFAULT_FORMAT")))
-	if f == "" {
-		f = strings.ToLower(strings.TrimSpace(os.Getenv("SCAN_FORMAT")))
-	}
+	f := strings.ToLower(strings.TrimSpace(appConfig.Defaults.Scan.Format))
 	if f == "png" || f == "jpg" || f == "jpeg" || f == "pdf" {
 		if f == "jpeg" {
 			return "jpg"
@@ -243,7 +217,7 @@ func getDefaultScanFormat() string {
 }
 
 func isAuthRequired() bool {
-	return getAuthPassword() != ""
+	return appConfig.Authentication.Enabled
 }
 
 func isValidSession(token string) bool {
@@ -273,7 +247,7 @@ func createSession() (string, error) {
 	}
 	token := hex.EncodeToString(bytes)
 	sessionMutex.Lock()
-	activeSessions[token] = time.Now().Add(7 * 24 * time.Hour)
+	activeSessions[token] = time.Now().Add(appConfig.Authentication.SessionLifetime)
 	sessionMutex.Unlock()
 	return token, nil
 }
@@ -341,8 +315,9 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		Name:     CookieName,
 		Value:    token,
 		Path:     "/",
-		MaxAge:   7 * 24 * 3600,
+		MaxAge:   int(appConfig.Authentication.SessionLifetime.Seconds()),
 		HttpOnly: true,
+		Secure:   appConfig.Authentication.SecureCookie,
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -367,6 +342,7 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
+		Secure:   appConfig.Authentication.SecureCookie,
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -465,10 +441,18 @@ func formatFileSize(bytes int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
+func handleDevices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"devices": appConfig.Devices, "default_device": appConfig.Defaults.Device})
+}
+
 // Dynamic Discovery of Default CUPS Printer
 func detectDefaultPrinter(ctx context.Context) string {
-	if custom := os.Getenv("DEFAULT_PRINTER"); custom != "" {
-		return custom
+	if d, err := configuredDevice(""); err == nil && d.Print != nil && d.Print.Queue != "" {
+		return d.Print.Queue
 	}
 
 	cmd := exec.CommandContext(ctx, "lpstat", "-d")
@@ -508,34 +492,19 @@ func discoverScannerDevices(ctx context.Context, force bool) ([]SaneDevice, stri
 		return cachedDevices, cachedDefaultDev
 	}
 
-	staticIP := os.Getenv("SCANNER_IP")
-	if staticIP == "" {
-		staticIP = os.Getenv("SCANNER_HOST")
-	}
-	customDefault := os.Getenv("DEFAULT_SCANNER")
-	autoDiscover := strings.ToLower(os.Getenv("AUTO_DISCOVER")) != "false"
-
 	var list []SaneDevice
 	var defaultDev string
-
-	// If a static scanner IP or host is configured, add it directly as high-priority
-	if staticIP != "" {
-		staticDeviceName := "epsonds:net:" + staticIP
-		list = append(list, SaneDevice{
-			Name:   staticDeviceName,
-			Vendor: "Network",
-			Model:  fmt.Sprintf("Scanner (%s)", staticIP),
-			Type:   "flatbed scanner",
-		})
-		defaultDev = staticDeviceName
-	}
-
-	if customDefault != "" {
-		defaultDev = customDefault
+	for _, d := range appConfig.Devices {
+		if d.Scan != nil && d.Scan.Driver == "sane" && d.Scan.Device != "" {
+			list = append(list, SaneDevice{Name: d.Scan.Device, Model: d.Name, Type: "scanner"})
+			if d.ID == appConfig.Defaults.Device {
+				defaultDev = d.Scan.Device
+			}
+		}
 	}
 
 	// Run dynamic network broadcast discovery if auto-discovery is enabled
-	if autoDiscover {
+	if true {
 		cmd := exec.CommandContext(ctx, "scanimage", "-f", "%d|%v|%m|%t%n")
 		output, err := cmd.CombinedOutput()
 		if err == nil && len(strings.TrimSpace(string(output))) > 0 {
@@ -614,17 +583,22 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	printingEnabled := isPrintingEnabled()
-	scanningEnabled := isScanningEnabled()
+	selected, selectedErr := configuredDevice(r.URL.Query().Get("device_id"))
+	printingEnabled := selectedErr == nil && selected.Print != nil
+	scanningEnabled := selectedErr == nil && selected.Scan != nil
 
 	var devices []SaneDevice
 	var defaultDev string
 	var scannerFound bool
 
 	if scanningEnabled {
-		force := r.URL.Query().Get("refresh") == "true"
-		devices, defaultDev = discoverScannerDevices(ctx, force)
-		scannerFound = len(devices) > 0 || defaultDev != ""
+		defaultDev = selected.ID
+		if selected.Scan.Driver == "escl" {
+			scannerFound = selected.Scan.Endpoint != ""
+		} else {
+			available, _ := exec.CommandContext(ctx, "scanimage", "-L").CombinedOutput()
+			scannerFound = strings.Contains(string(available), "`"+selected.Scan.Device+"'")
+		}
 	}
 
 	var defaultPrinter string
@@ -634,7 +608,7 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	var activeJobs int
 
 	if printingEnabled {
-		defaultPrinter = detectDefaultPrinter(ctx)
+		defaultPrinter = selected.Print.Queue
 
 		cmdCups := exec.CommandContext(ctx, "lpstat", "-p", "-d")
 		cupsOut, _ := cmdCups.CombinedOutput()
@@ -675,7 +649,18 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // Native Scanner Execution with Dynamic Fallback
-func executeScan(ctx context.Context, device string, dpi int, mode string, format string, targetPath string) error {
+func executeScan(ctx context.Context, deviceID string, dpi int, mode string, format string, targetPath string) error {
+	configured, err := configuredDevice(deviceID)
+	if err != nil {
+		return err
+	}
+	if configured.Scan == nil {
+		return fmt.Errorf("device %q does not support scanning", configured.ID)
+	}
+	if configured.Scan.Driver == "escl" {
+		return executeESCLScan(ctx, configured.Scan, dpi, mode, format, targetPath)
+	}
+	device := configured.Scan.Device
 	var scanFormat string
 	switch format {
 	case "jpg", "jpeg":
@@ -688,10 +673,11 @@ func executeScan(ctx context.Context, device string, dpi int, mode string, forma
 
 	targetDev := device
 	if targetDev == "" {
-		targetDev = cachedDefaultDev
+		return fmt.Errorf("SANE device name is empty")
 	}
-	if targetDev == "" {
-		_, targetDev = discoverScannerDevices(ctx, false)
+	listCmd := exec.CommandContext(ctx, "scanimage", "-L")
+	if available, listErr := listCmd.CombinedOutput(); listErr != nil || !strings.Contains(string(available), "`"+targetDev+"'") {
+		return fmt.Errorf("configured SANE device %q is unavailable; check backend configuration and file permissions (scanimage -L: %s)", targetDev, strings.TrimSpace(string(available)))
 	}
 
 	var scanOutFile string
@@ -813,7 +799,7 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	if err := executeScan(ctx, req.Device, req.DPI, req.Mode, req.Format, outputPath); err != nil {
+	if err := executeScan(ctx, req.DeviceID, req.DPI, req.Mode, req.Format, outputPath); err != nil {
 		log.Printf("Scan error: %v", err)
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("Scanning failed: %v", err))
 		return
@@ -913,7 +899,7 @@ func handleMultiPageAddPage(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	if err := executeScan(ctx, "", req.DPI, req.Mode, "png", pagePath); err != nil {
+	if err := executeScan(ctx, req.DeviceID, req.DPI, req.Mode, "png", pagePath); err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("Page scan failed: %v", err))
 		return
 	}
@@ -1275,7 +1261,12 @@ func handlePrintersList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	defaultPrinter := detectDefaultPrinter(r.Context())
+	d, err := configuredDevice(r.URL.Query().Get("device_id"))
+	if err != nil || d.Print == nil {
+		jsonError(w, http.StatusBadRequest, "Selected device does not support printing")
+		return
+	}
+	defaultPrinter := d.Print.Queue
 
 	cmdStat := exec.Command("lpstat", "-p", "-d")
 	outStat, _ := cmdStat.CombinedOutput()
@@ -1312,14 +1303,14 @@ func handlePrintJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Limit upload size to 50MB to prevent memory exhaustion
-	r.Body = http.MaxBytesReader(w, r.Body, 50<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, appConfig.Server.RequestLimitBytes)
 
 	contentType := r.Header.Get("Content-Type")
 
 	var targetFilePath string
 	var cleanupTemp bool
 	var copies = 1
+	var deviceID string
 
 	if strings.Contains(contentType, "multipart/form-data") {
 		if err := r.ParseMultipartForm(25 << 20); err != nil {
@@ -1339,6 +1330,7 @@ func handlePrintJob(w http.ResponseWriter, r *http.Request) {
 				copies = c
 			}
 		}
+		deviceID = r.FormValue("device_id")
 
 		ext := strings.ToLower(filepath.Ext(header.Filename))
 		tempFile, err := os.CreateTemp("", "print_upload_*"+ext)
@@ -1361,6 +1353,7 @@ func handlePrintJob(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ScanFilename string `json:"scan_filename"`
 			Copies       int    `json:"copies"`
+			DeviceID     string `json:"device_id"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonError(w, http.StatusBadRequest, "Invalid JSON payload")
@@ -1377,13 +1370,19 @@ func handlePrintJob(w http.ResponseWriter, r *http.Request) {
 		if req.Copies >= 1 && req.Copies <= 20 {
 			copies = req.Copies
 		}
+		deviceID = req.DeviceID
 	}
 
 	if cleanupTemp {
 		defer os.Remove(targetFilePath)
 	}
 
-	printer := detectDefaultPrinter(r.Context())
+	d, err := configuredDevice(deviceID)
+	if err != nil || d.Print == nil {
+		jsonError(w, http.StatusBadRequest, "Selected device does not support printing")
+		return
+	}
+	printer := d.Print.Queue
 
 	args := []string{
 		"-n", strconv.Itoa(copies),
@@ -1420,7 +1419,8 @@ func handleCancelPrintJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		JobID string `json:"job_id"`
+		JobID    string `json:"job_id"`
+		DeviceID string `json:"device_id"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
@@ -1428,7 +1428,10 @@ func handleCancelPrintJob(w http.ResponseWriter, r *http.Request) {
 	if req.JobID != "" && validFileNameRx.MatchString(req.JobID) {
 		cmd = exec.Command("cancel", req.JobID)
 	} else {
-		printer := detectDefaultPrinter(r.Context())
+		printer := ""
+		if d, e := configuredDevice(req.DeviceID); e == nil && d.Print != nil {
+			printer = d.Print.Queue
+		}
 		if printer != "" {
 			cmd = exec.Command("cancel", "-a", printer)
 		} else {

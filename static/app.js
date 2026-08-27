@@ -68,7 +68,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const selectedPrintFileName = document.getElementById('selectedPrintFileName');
     const printCopies = document.getElementById('printCopies');
     const printDestinationQueue = document.getElementById('printDestinationQueue');
+    const printPageRange = document.getElementById('printPageRange');
+    const printPageRangeHint = document.getElementById('printPageRangeHint');
     const submitPrintBtn = document.getElementById('submitPrintBtn');
+    const printPreview = document.getElementById('printPreview');
+    const printPreviewBody = document.getElementById('printPreviewBody');
+    const pdfPreviewControls = document.getElementById('pdfPreviewControls');
+    const pdfPrevPage = document.getElementById('pdfPrevPage');
+    const pdfNextPage = document.getElementById('pdfNextPage');
+    const pdfPageStatus = document.getElementById('pdfPageStatus');
     const printerQueueContainer = document.getElementById('printerQueueContainer');
     const rawCupsStatus = document.getElementById('rawCupsStatus');
     const cancelAllJobsBtn = document.getElementById('cancelAllJobsBtn');
@@ -98,6 +106,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Feature Flags
     let printingEnabled = true;
     let scanningEnabled = true;
+    let printPreviewURL = null;
+    let previewPDF = null;
+    let previewPDFPage = 1;
+    let previewGeneration = 0;
 
     async function loadDevices() {
         try {
@@ -658,11 +670,100 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    function handleSelectedPrintFile(file) {
+    async function handleSelectedPrintFile(file) {
         selectedPrintFile = file;
         selectedPrintFileName.textContent = `Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
         selectedPrintFileName.style.display = 'block';
         submitPrintBtn.disabled = false;
+        printPageRange.value = '';
+        await showPrintPreview(file);
+    }
+
+    function clearPrintPreview() {
+        previewGeneration++;
+        previewPDF = null;
+        previewPDFPage = 1;
+        if (printPreviewURL) URL.revokeObjectURL(printPreviewURL);
+        printPreviewURL = null;
+        printPreviewBody.replaceChildren();
+        printPreview.hidden = true;
+        pdfPreviewControls.hidden = true;
+        printPageRangeHint.textContent = 'Leave empty to print all pages.';
+    }
+
+    async function showPrintPreview(file) {
+        clearPrintPreview();
+        const generation = previewGeneration;
+        printPreviewURL = URL.createObjectURL(file);
+        printPreview.hidden = false;
+        const type = file.type || '';
+        const extension = file.name.split('.').pop().toLowerCase();
+        try {
+            if (type === 'application/pdf' || extension === 'pdf') {
+                const pdfjs = await import('./vendor/pdfjs/pdf.min.mjs');
+                pdfjs.GlobalWorkerOptions.workerSrc = './vendor/pdfjs/pdf.worker.min.mjs';
+                const pdf = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+                if (generation !== previewGeneration) return;
+                previewPDF = pdf;
+                pdfPreviewControls.hidden = false;
+                printPageRangeHint.textContent = `${pdf.numPages} pages. Examples: 1,3-5`;
+                await renderPDFPreviewPage(1);
+            } else if (type.startsWith('image/') || ['png', 'jpg', 'jpeg'].includes(extension)) {
+                const img = document.createElement('img');
+                img.className = 'print-preview-image';
+                img.alt = `Preview of ${file.name}`;
+                img.src = printPreviewURL;
+                printPreviewBody.appendChild(img);
+            } else if (type.startsWith('text/') || extension === 'txt') {
+                const pre = document.createElement('pre');
+                pre.className = 'print-preview-text';
+                pre.textContent = await file.text();
+                if (generation !== previewGeneration) return;
+                printPreviewBody.appendChild(pre);
+            } else {
+                printPreviewBody.textContent = 'Preview is not available for this file type.';
+            }
+        } catch (err) {
+            if (generation === previewGeneration) printPreviewBody.textContent = `Unable to preview this file: ${err.message}`;
+        }
+    }
+
+    async function renderPDFPreviewPage(pageNumber) {
+        if (!previewPDF) return;
+        previewPDFPage = Math.max(1, Math.min(pageNumber, previewPDF.numPages));
+        const page = await previewPDF.getPage(previewPDFPage);
+        const baseViewport = page.getViewport({ scale: 1 });
+        const availableWidth = Math.min(printPreviewBody.clientWidth || 640, 760);
+        const viewport = page.getViewport({ scale: availableWidth / baseViewport.width });
+        const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+        const canvas = document.createElement('canvas');
+        canvas.className = 'print-preview-canvas';
+        canvas.width = Math.floor(viewport.width * pixelRatio);
+        canvas.height = Math.floor(viewport.height * pixelRatio);
+        canvas.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.style.height = `${Math.floor(viewport.height)}px`;
+        printPreviewBody.replaceChildren(canvas);
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport, transform: pixelRatio === 1 ? null : [pixelRatio, 0, 0, pixelRatio, 0, 0] }).promise;
+        pdfPageStatus.textContent = `Page ${previewPDFPage} of ${previewPDF.numPages}`;
+        pdfPrevPage.disabled = previewPDFPage === 1;
+        pdfNextPage.disabled = previewPDFPage === previewPDF.numPages;
+    }
+
+    pdfPrevPage.addEventListener('click', () => renderPDFPreviewPage(previewPDFPage - 1));
+    pdfNextPage.addEventListener('click', () => renderPDFPreviewPage(previewPDFPage + 1));
+
+    function validatePageRange(value, maxPage = null) {
+        const normalized = value.replace(/\s+/g, '');
+        if (!normalized) return '';
+        for (const part of normalized.split(',')) {
+            const match = part.match(/^(\d+)(?:-(\d+))?$/);
+            if (!match) throw new Error('Use page numbers and ranges such as 1,3-5.');
+            const first = Number(match[1]);
+            const last = Number(match[2] || match[1]);
+            if (first < 1 || last < first) throw new Error(`Invalid page range: ${part}`);
+            if (maxPage && last > maxPage) throw new Error(`Page ${last} exceeds the document's ${maxPage} pages.`);
+        }
+        return normalized;
     }
 
     printUploadForm.addEventListener('submit', async (e) => {
@@ -670,10 +771,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!selectedPrintFile) return;
 
         const copies = parseInt(printCopies.value, 10) || 1;
+        let pageRanges;
+        try {
+            pageRanges = validatePageRange(printPageRange.value, previewPDF?.numPages || null);
+        } catch (err) {
+            showToast(err.message, 'error');
+            printPageRange.focus();
+            return;
+        }
         const formData = new FormData();
         formData.append('file', selectedPrintFile);
         formData.append('copies', copies.toString());
         formData.append('device_id', deviceSelect.value);
+        formData.append('page_ranges', pageRanges);
 
         submitPrintBtn.disabled = true;
         showToast('Submitting print job to queue...', 'info');
@@ -690,6 +800,7 @@ document.addEventListener('DOMContentLoaded', () => {
             printUploadForm.reset();
             selectedPrintFile = null;
             selectedPrintFileName.style.display = 'none';
+            clearPrintPreview();
             submitPrintBtn.disabled = true;
             loadPrinterStatus();
 
@@ -706,13 +817,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const c = parseInt(copies, 10);
         if (isNaN(c) || c < 1) return;
 
+        const pageRangeInput = prompt('Pages to print (leave empty for all; example: 1,3-5):', '');
+        if (pageRangeInput === null) return;
+        let pageRanges;
+        try {
+            pageRanges = validatePageRange(pageRangeInput);
+        } catch (err) {
+            showToast(err.message, 'error');
+            return;
+        }
+
         showToast(`Sending ${filename} to printer...`, 'info');
 
         try {
             const res = await fetch('/api/print', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ scan_filename: filename, copies: c, device_id: deviceSelect.value })
+                body: JSON.stringify({ scan_filename: filename, copies: c, page_ranges: pageRanges, device_id: deviceSelect.value })
             });
             const data = await res.json();
             if (!res.ok || data.error) throw new Error(data.message || 'Print job failed');

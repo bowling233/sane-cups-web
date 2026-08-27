@@ -1352,6 +1352,7 @@ func handlePrintJob(w http.ResponseWriter, r *http.Request) {
 	var cleanupTemp bool
 	var copies = 1
 	var deviceID string
+	var pageRanges string
 
 	if strings.Contains(contentType, "multipart/form-data") {
 		if err := r.ParseMultipartForm(25 << 20); err != nil {
@@ -1372,6 +1373,7 @@ func handlePrintJob(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		deviceID = r.FormValue("device_id")
+		pageRanges = r.FormValue("page_ranges")
 
 		ext := strings.ToLower(filepath.Ext(header.Filename))
 		tempFile, err := os.CreateTemp("", "print_upload_*"+ext)
@@ -1395,6 +1397,7 @@ func handlePrintJob(w http.ResponseWriter, r *http.Request) {
 			ScanFilename string `json:"scan_filename"`
 			Copies       int    `json:"copies"`
 			DeviceID     string `json:"device_id"`
+			PageRanges   string `json:"page_ranges"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonError(w, http.StatusBadRequest, "Invalid JSON payload")
@@ -1412,6 +1415,13 @@ func handlePrintJob(w http.ResponseWriter, r *http.Request) {
 			copies = req.Copies
 		}
 		deviceID = req.DeviceID
+		pageRanges = req.PageRanges
+	}
+
+	pageRanges, err := normalizePageRanges(pageRanges)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	if cleanupTemp {
@@ -1432,6 +1442,9 @@ func handlePrintJob(w http.ResponseWriter, r *http.Request) {
 	if printer != "" {
 		args = append([]string{"-d", printer}, args...)
 	}
+	if pageRanges != "" {
+		args = append([]string{"-P", pageRanges}, args...)
+	}
 
 	cmd := exec.Command("lp", args...)
 	output, err := cmd.CombinedOutput()
@@ -1445,6 +1458,31 @@ func handlePrintJob(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"message": strings.TrimSpace(string(output)),
 	})
+}
+
+func normalizePageRanges(value string) (string, error) {
+	value = strings.ReplaceAll(value, " ", "")
+	if value == "" {
+		return "", nil
+	}
+	parts := strings.Split(value, ",")
+	for _, part := range parts {
+		bounds := strings.Split(part, "-")
+		if len(bounds) < 1 || len(bounds) > 2 || bounds[0] == "" {
+			return "", fmt.Errorf("invalid page range %q; use a list such as 1,3-5", value)
+		}
+		first, err := strconv.Atoi(bounds[0])
+		if err != nil || first < 1 || first > 1000000 {
+			return "", fmt.Errorf("invalid page range %q; page numbers must be positive integers", value)
+		}
+		if len(bounds) == 2 {
+			last, err := strconv.Atoi(bounds[1])
+			if err != nil || last < first || last > 1000000 {
+				return "", fmt.Errorf("invalid page range %q; range end must not precede its start", value)
+			}
+		}
+	}
+	return strings.Join(parts, ","), nil
 }
 
 // POST /api/print/cancel

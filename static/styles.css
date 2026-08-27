@@ -168,6 +168,64 @@ body {
     border-color: var(--primary);
 }
 
+.print-preview {
+    margin-top: 1rem;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-subtle);
+}
+
+.print-preview-body {
+    display: flex;
+    min-height: 180px;
+    max-height: 520px;
+    align-items: flex-start;
+    justify-content: center;
+    overflow: auto;
+    padding: 0.75rem;
+    color: var(--text-muted);
+}
+
+.print-preview-canvas,
+.print-preview-image {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    background: white;
+    box-shadow: 0 1px 4px rgb(0 0 0 / 18%);
+}
+
+.print-preview-text {
+    width: 100%;
+    overflow: visible;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--text);
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.preview-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 0.55rem;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.print-preview[hidden],
+.preview-controls[hidden] {
+    display: none;
+}
+
+.form-hint {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
 .nav-tab {
     flex: 0 0 auto;
     background: transparent;
